@@ -24,7 +24,8 @@ async function scrapeWithScrapingBee(
         url: url,
         params: {
           render_js: true,
-          wait: 3000,
+          premium_proxy: true,
+          wait_for: "a[href^='/products/']",
         },
       });
       const decoder = new TextDecoder();
@@ -95,10 +96,37 @@ function parseListingsFromHtml(
       context.match(/€[\d,.]+/i);
     const price = priceMatch?.[0] || "Price not found";
 
-    const imgMatch = context.match(
-      /src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i,
-    );
-    const imageUrl = imgMatch?.[1]?.split("?")[0] || "";
+    // Parse srcset to get the highest resolution image.
+    // Depop uses P10.jpg as a tiny blur placeholder (first src= hit),
+    // and P8.jpg (1280w) / P1.jpg (640w) as full-res in the srcset.
+    const srcsetMatch = context.match(/srcset="([^"]+)"/i);
+    let imageUrl = "";
+    if (srcsetMatch) {
+      // srcset entries: "https://...P2.jpg 150w, https://...P1.jpg 640w, ..."
+      const entries = srcsetMatch[1]
+        .split(",")
+        .map((e) => e.trim())
+        .map((e) => {
+          const parts = e.split(/\s+/);
+          const url = parts[0];
+          const width = parseInt(parts[1] ?? "0", 10);
+          return { url: url.split("?")[0], width };
+        })
+        .filter((e) => e.url && e.width > 0);
+      // Pick the highest width available
+      entries.sort((a, b) => b.width - a.width);
+      imageUrl = entries[0]?.url ?? "";
+    }
+    // Fallback: grab any image src but avoid the P10 blur placeholder
+    if (!imageUrl) {
+      const imgMatches = [
+        ...context.matchAll(
+          /src="(https?:\/\/media-photos\.depop\.com[^"]+)"/gi,
+        ),
+      ];
+      const nonBlur = imgMatches.find((m) => !m[1].includes("P10."));
+      imageUrl = nonBlur?.[1]?.split("?")[0] || "";
+    }
 
     listings.push({
       id,

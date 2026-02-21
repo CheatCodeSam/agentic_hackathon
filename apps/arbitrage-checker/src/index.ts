@@ -123,8 +123,42 @@ async function runService(): Promise<void> {
     "[ARBITRAGE] Starting service mode — listening for new Depop listings...",
   );
 
-  // On startup, drain any existing unchecked listings so we don't miss
-  // items that arrived while the service was offline.
+  // Verify main Redis connection is alive.
+  try {
+    await redis.ping();
+    console.log("[ARBITRAGE] Redis connection established");
+  } catch {
+    console.error("[ARBITRAGE] Failed to connect to Redis. Is it running?");
+    console.error("[ARBITRAGE] Run: docker compose up -d");
+    process.exit(1);
+  }
+
+  // ---- 1. Set up the subscriber FIRST so we don't miss any messages ----
+  // getSubscriber() now waits for the connection to be fully ready.
+  const subscriber = await getSubscriber();
+  await subscriber.subscribe("depop:new_listing");
+  console.log(
+    "[ARBITRAGE] Subscribed to depop:new_listing — waiting for new items...",
+  );
+
+  subscriber.on("message", async (channel: string, message: string) => {
+    if (channel !== "depop:new_listing") return;
+
+    let listing: DepopListing;
+    try {
+      listing = JSON.parse(message);
+    } catch {
+      console.error("[ARBITRAGE] Failed to parse pub/sub message:", message);
+      return;
+    }
+
+    console.log(
+      `[ARBITRAGE] New listing received via pub/sub: ${listing.title}`,
+    );
+    await processListing(listing);
+  });
+
+  // ---- 2. THEN drain any backlog that arrived while offline ----
   const existing = await getAllDepotListings();
   const unchecked = [];
   for (const listing of existing) {
@@ -147,29 +181,9 @@ async function runService(): Promise<void> {
     );
   }
 
-  // Subscribe to the channel depop-scraper publishes on when it stores a new listing.
-  const subscriber = getSubscriber();
-  await subscriber.subscribe("depop:new_listing");
   console.log(
-    "[ARBITRAGE] Subscribed to depop:new_listing — waiting for new items...\n",
+    "[ARBITRAGE] Service is running. Listening for new listings...\n",
   );
-
-  subscriber.on("message", async (channel: string, message: string) => {
-    if (channel !== "depop:new_listing") return;
-
-    let listing: DepopListing;
-    try {
-      listing = JSON.parse(message);
-    } catch {
-      console.error("[ARBITRAGE] Failed to parse pub/sub message:", message);
-      return;
-    }
-
-    console.log(
-      `[ARBITRAGE] New listing received via pub/sub: ${listing.title}`,
-    );
-    await processListing(listing);
-  });
 
   // Handle graceful shutdown
   const shutdown = async () => {

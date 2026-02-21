@@ -7,10 +7,50 @@ const redis = new Redis(redisUrl);
 // Separate connection required for subscribe mode — a subscribed client
 // cannot issue regular commands on the same connection.
 let _subscriber: Redis | null = null;
-export function getSubscriber(): Redis {
-  if (!_subscriber) {
-    _subscriber = new Redis(redisUrl);
+
+/**
+ * Returns a subscriber Redis client that is guaranteed to be connected and
+ * ready.  The first call creates the connection and waits for the "ready"
+ * event before resolving so that the caller can safely subscribe immediately.
+ */
+export async function getSubscriber(): Promise<Redis> {
+  if (_subscriber && _subscriber.status === "ready") {
+    return _subscriber;
   }
+
+  // If there is a stale/disconnected instance, clean it up first.
+  if (_subscriber) {
+    try {
+      _subscriber.disconnect();
+    } catch {
+      // ignore
+    }
+    _subscriber = null;
+  }
+
+  _subscriber = new Redis(redisUrl);
+
+  // Wait until the underlying TCP socket is connected and Redis has replied
+  // to the implicit AUTH / SELECT handshake.
+  await new Promise<void>((resolve, reject) => {
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      _subscriber!.removeListener("ready", onReady);
+      _subscriber!.removeListener("error", onError);
+    };
+
+    _subscriber!.once("ready", onReady);
+    _subscriber!.once("error", onError);
+  });
+
+  console.log("[REDIS] Subscriber connection established and ready");
   return _subscriber;
 }
 

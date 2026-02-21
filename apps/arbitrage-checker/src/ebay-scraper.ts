@@ -27,8 +27,9 @@ async function scrapeWithScrapingBee(
       const response = await client.htmlApi({
         url: url,
         params: {
-          render_js: true,
-          wait: 3000,
+          render_js: false,
+          premium_proxy: true,
+          stealth_proxy: true,
         },
       });
       const decoder = new TextDecoder();
@@ -80,45 +81,96 @@ function parseSoldListingsFromHtml(
 ): EbaySoldListing[] {
   const listings: EbaySoldListing[] = [];
 
-  const itemPattern =
-    /<li[^>]*class="[^"]*s-item[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
-  const itemMatches = [...html.matchAll(itemPattern)].slice(0, maxItems + 5);
+  // eBay's current SRP uses <li class="s-card s-card--horizontal"> for each listing.
+  // Split on the opening <li> tag for each card.
+  const splitPattern = /(?=<li[^>]*class="[^"]*s-card[^"]*")/gi;
+  const chunks = html.split(splitPattern).slice(1); // first chunk is preamble
 
-  for (const itemMatch of itemMatches) {
+  // Strip HTML comments to simplify parsing
+  const stripComments = (s: string) => s.replace(/<!--[\s\S]*?-->/g, "");
+
+  for (const rawChunk of chunks) {
     if (listings.length >= maxItems) break;
 
-    const itemHtml = itemMatch[1];
+    const chunk = stripComments(rawChunk);
 
-    const linkMatch = itemHtml.match(
-      /<a[^>]*href="([^"]+)"[^>]*class="[^"]*s-item__link[^"]*"/i,
-    );
+    // eBay uses unquoted hrefs: href=https://www.ebay.com/itm/...
+    // Match s-card__link anchor with either quoted or unquoted href
+    const linkMatch =
+      chunk.match(/class=s-card__link[^>]+href=(https:\/\/[^\s>'"]+)/i) ||
+      chunk.match(/href=(https:\/\/[^\s>'"]+)[^>]*class=s-card__link/i) ||
+      chunk.match(/class="[^"]*s-card__link[^"]*"[^>]+href="([^"]+)"/i) ||
+      chunk.match(/href="([^"]+)"[^>]*class="[^"]*s-card__link[^"]*"/i);
     if (!linkMatch) continue;
-    const url = linkMatch[1].split("?")[0];
 
+    // Strip query params to get a clean item URL
+    const url = linkMatch[1].split("?")[0];
     if (url.includes("/b/") || url.includes("/sch/")) continue;
 
     const id = generateListingId(url);
 
-    const titleMatch = itemHtml.match(
-      /<h3[^>]*class="[^"]*s-item__title[^"]*"[^>]*>([\s\S]*?)<\/h3>/i,
-    );
-    let title = titleMatch?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
-    if (title.toLowerCase().includes("shop on ebay") || !title) continue;
+    // Title: inside <div class=s-card__title>, the item title is in a span
+    // with class like "su-styled-text primary default"
+    // Skip "Shop on eBay" placeholder cards (no aria-label="Sold Item")
+    if (
+      !chunk.includes('aria-label="Sold Item"') &&
+      !chunk.includes("Sold Item")
+    )
+      continue;
 
-    const priceMatch = itemHtml.match(
-      /<span[^>]*class="[^"]*s-item__price[^"]*"[^>]*>([\s\S]*?)<\/span>/i,
+    // Extract title from the s-card__title div — look for the primary text span
+    const titleDivMatch = chunk.match(
+      /<div[^>]*class=s-card__title[^>]*>([\s\S]*?)<\/div>/i,
+    );
+    let title = "";
+    if (titleDivMatch) {
+      // The real title is in a span with "primary" class; strip all inner tags
+      title = titleDivMatch[1]
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      // Remove "New Listing" prefix and "Opens in a new window or tab" suffix
+      title = title
+        .replace(/^New\s+Listing\s*/i, "")
+        .replace(/Opens in a new window or tab.*/i, "")
+        .trim();
+    }
+    if (!title || title.toLowerCase().includes("shop on ebay")) continue;
+
+    // Price: <span class="...s-card__price">$59.99</span>
+    const priceMatch = chunk.match(
+      /<span[^>]*class="[^"]*s-card__price[^"]*"[^>]*>([\s\S]*?)<\/span>/i,
     );
     const priceText = priceMatch?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
     const { value: price, currency } = parsePrice(priceText);
     if (price <= 0) continue;
 
-    const dateMatch = itemHtml.match(
-      /<span[^>]*class="[^"]*s-item__title--tagblock[^"]*"[^>]*>([\s\S]*?)<\/span>/i,
+    // Sold date: <span ...aria-label="Sold Item">Sold Feb 21, 2026</span>
+    const dateMatch = chunk.match(
+      /<span[^>]*aria-label="Sold Item"[^>]*>([\s\S]*?)<\/span>/i,
     );
     const soldDate = dateMatch?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
 
-    const imgMatch = itemHtml.match(/<img[^>]*src="([^"]+)"/i);
-    const imageUrl = imgMatch?.[1]?.split("?")[0] || "";
+    // Image: <img class=s-card__image ... src=URL>
+    // eBay uses unquoted src on s-card__image
+    const imgMatch =
+      chunk.match(/class=s-card__image[^>]+src=(https?:\/\/[^\s>'"]+)/i) ||
+      chunk.match(/class="[^"]*s-card__image[^"]*"[^>]+src="([^"]+)"/i) ||
+      chunk.match(/src="([^"]+)"[^>]*class="[^"]*s-card__image[^"]*"/i);
+    // Fallback: alt text matches title on the image near the item link
+    const imgAltMatch = chunk.match(
+      new RegExp(
+        `alt="${title.substring(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^"]*"[^>]*src="([^"]+)"`,
+        "i",
+      ),
+    );
+    let imageUrl =
+      imgMatch?.[1]?.split("?")[0] || imgAltMatch?.[1]?.split("?")[0] || "";
+    // Also try data-defer-load for lazy-loaded images
+    if (!imageUrl) {
+      const deferMatch = chunk.match(/data-defer-load=(https?:\/\/[^\s>'"]+)/i);
+      imageUrl = deferMatch?.[1]?.split("?")[0] || "";
+    }
 
     listings.push({
       id,

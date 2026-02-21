@@ -1,5 +1,5 @@
 {
-  "name": "agentic_hackathon",
+  "name": "dealio",
   "private": true,
   "scripts": {
     "build": "turbo run build",

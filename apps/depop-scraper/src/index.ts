@@ -1,7 +1,7 @@
 import { scrapeDepop } from "./scraper";
 import { storeListings, redis } from "./redis";
 
-const BASE_INTERVAL_MS = 5 * 60 * 1000;
+const BASE_INTERVAL_MS = 2 * 60 * 1000;
 const MAX_JITTER_MS = 60 * 1000;
 const MAX_ITEMS_PER_SCRAPE = 3;
 
