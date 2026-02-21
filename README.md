@@ -1,135 +1,128 @@
-# Turborepo starter
+# dealio
 
-This Turborepo starter is maintained by the Turborepo core team.
+Automated arbitrage finder that scrapes Depop listings, compares them against eBay sold prices, and surfaces profitable flip opportunities through a real-time dashboard.
 
-## Using this example
+## How It Works
 
-Run the following command:
+```
+Depop Scraper          Redis (pub/sub)          Arbitrage Checker
++--------------+       +---------------+        +------------------+
+| Scrapes Depop| ----> | depop:listing  | -----> | Compares against |
+| for keywords |       | depop:new_listing       | eBay sold prices |
++--------------+       +---------------+        +------------------+
+                              |                         |
+                              v                         v
+                       +---------------+        +------------------+
+                       | Next.js Site  | <----- | arbitrage:       |
+                       | (Dashboard)   |        | opportunity      |
+                       +---------------+        +------------------+
+```
+
+1. **Depop Scraper** continuously scrapes Depop search results for configured keywords via [ScrapingBee](https://www.scrapingbee.com/)
+2. New listings are stored in Redis and published to a `depop:new_listing` pub/sub channel
+3. **Arbitrage Checker** subscribes to that channel, takes each listing title, and scrapes eBay's sold/completed listings for comparable items
+4. If the eBay sold price exceeds the Depop asking price, it's flagged as an arbitrage opportunity
+5. The **Next.js dashboard** reads everything from Redis and displays listings, opportunities, profit margins, and tracked keywords
+
+## Project Structure
+
+```
+apps/
+  depop-scraper/       Depop search scraper (Bun + ScrapingBee)
+  arbitrage-checker/   eBay sold price comparator (Bun + ScrapingBee)
+  site/                Dashboard UI (Next.js 16 + Tailwind CSS)
+docker-compose.yml     Redis 7 service
+```
+
+## Prerequisites
+
+- [Bun](https://bun.sh/) v1.3+
+- [Docker](https://www.docker.com/) (for Redis)
+- [ScrapingBee](https://www.scrapingbee.com/) API key
+
+## Getting Started
+
+### 1. Install dependencies
 
 ```sh
-npx create-turbo@latest
+bun install
 ```
 
-## What's inside?
+### 2. Start Redis
 
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+```sh
+docker compose up -d
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### 3. Configure environment variables
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build --filter=docs
+Create `.env` files in both service directories:
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+```sh
+# apps/depop-scraper/.env
+SCRAPINGBEE_API_KEY=your_api_key_here
+REDIS_URL=redis://localhost:6379
 
-### Develop
-
-To develop all apps and packages, run the following command:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
+# apps/arbitrage-checker/.env
+SCRAPINGBEE_API_KEY=your_api_key_here
+REDIS_URL=redis://localhost:6379
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### 4. Start the services
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev --filter=web
+Start the arbitrage checker first so it's subscribed before listings arrive:
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
+```sh
+# Terminal 1 - Arbitrage checker (subscribes to new listings)
+cd apps/arbitrage-checker
+bun run start --service
 
-### Remote Caching
+# Terminal 2 - Depop scraper (scrapes and publishes listings)
+cd apps/depop-scraper
+bun run start --keyword "vintage polo ralph lauren"
 
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo login
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
+# Terminal 3 - Dashboard
+cd apps/site
+bun run dev
 ```
 
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
+The dashboard will be available at [http://localhost:3000](http://localhost:3000).
 
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
+## Usage
 
+### Depop Scraper
+
+```sh
+# Continuous mode (scrapes every ~2-3 minutes with jitter)
+bun run start --keyword "carhartt workwear"
+
+# Single scrape for testing
+bun run start --keyword "nike vintage" --once
 ```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo link
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
+### Arbitrage Checker
+
+```sh
+# Service mode - subscribes to pub/sub and processes new listings in real-time
+bun run start --service
+
+# One-shot mode - checks all existing unchecked listings then exits
+bun run start --once
 ```
 
-## Useful Links
+### Dashboard
 
-Learn more about the power of Turborepo:
+The site has three pages:
 
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+- **Dashboard** (`/`) -- stats overview, recent opportunities, and latest scraped listings
+- **Listings** (`/listings`) -- all scraped Depop listings grouped by keyword
+- **Opportunities** (`/opportunities`) -- all arbitrage opportunities sorted by profit, with links to both the Depop and eBay listings
+
+## Tech Stack
+
+- **Runtime:** Bun
+- **Monorepo:** Turborepo
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4
+- **Data:** Redis 7 (pub/sub + key-value storage)
+- **Scraping:** ScrapingBee (premium proxies, JS rendering)
+- **Language:** TypeScript
