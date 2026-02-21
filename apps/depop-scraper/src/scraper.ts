@@ -70,9 +70,24 @@ function parseListingsFromHtml(
     );
     const context = html.slice(contextStart, contextEnd);
 
-    const titleMatch =
-      context.match(/alt="([^"]+)"/i) || context.match(/title="([^"]+)"/i);
-    const title = titleMatch?.[1]?.trim() || "Unknown Item";
+    // Depop cards have no title text in search HTML — alt="" and aria-label="" are both blank.
+    // Extract the title from the URL slug instead.
+    // Slug format: /products/{username}-{title-words}-{short-hash}/
+    // e.g. /products/ethz_tkr-ralph-lauren-pink-button-up-83e1/
+    const slugBody = productPath
+      .replace(/^\/products\//, "")
+      .replace(/\/$/, "");
+    // Strip leading username (everything up to and including the first underscore segment + dash)
+    // Username may contain underscores: e.g. "ethz_tkr"
+    const withoutUsername = slugBody.replace(/^[^-]+-/, "");
+    // Strip trailing short hash (4-8 alphanumeric chars at the end)
+    const withoutHash = withoutUsername.replace(/-[a-z0-9]{4,8}$/, "");
+    const title =
+      withoutHash
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ")
+        .trim() || slugBody.replace(/-/g, " ");
 
     const priceMatch =
       context.match(/£[\d,.]+/i) ||

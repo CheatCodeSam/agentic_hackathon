@@ -23,6 +23,7 @@ export async function markListingSeen(
 export async function storeListing(listing: DepopListing): Promise<void> {
   const key = `depop:listing:${listing.id}`;
   await redis.set(key, JSON.stringify(listing));
+  await redis.publish("depop:new_listing", JSON.stringify(listing));
   console.log(`[REDIS] Stored listing: ${listing.title} - ${listing.price}`);
 }
 
